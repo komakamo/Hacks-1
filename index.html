@@ -60,10 +60,26 @@
     </div>
 
     <!-- Game Container -->
-    <div class="relative flex-grow flex justify-center items-center bg-gray-800" id="gameContainer">
-        <canvas id="gameCanvas"></canvas>
-        
-        <!-- Action Bar (Bottom) -->
+        <div class="relative flex-grow flex justify-center items-center bg-gray-800" id="gameContainer">
+            <canvas id="gameCanvas"></canvas>
+
+            <!-- Tower Management Panel -->
+            <div id="towerPanel" class="absolute left-2 top-16 bg-gray-900/80 p-3 rounded-lg border border-gray-700 text-xs space-y-1 w-60 hidden z-10">
+                <div class="text-sm font-bold text-yellow-300">タワー管理</div>
+                <div id="towerName" class="text-lg text-white">タワー未選択</div>
+                <div id="towerStats" class="text-gray-300">射程/ダメージ/クールダウン</div>
+                <div class="flex gap-2 mt-1">
+                    <button id="btnTowerUpgrade" class="flex-1 bg-indigo-700 hover:bg-indigo-600 text-white py-1 px-2 rounded border border-indigo-400 text-xs transition">
+                        強化 <span id="towerUpgradeCost" class="text-yellow-300"></span>
+                    </button>
+                    <button id="btnTowerSell" class="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-1 px-2 rounded border border-gray-400 text-xs transition">
+                        売却/再配置 <span id="towerSellRefund" class="text-green-300"></span>
+                    </button>
+                </div>
+                <div id="towerCosts" class="text-gray-400 text-[11px]"></div>
+            </div>
+
+            <!-- Action Bar (Bottom) -->
         <div class="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-900/90 p-2 rounded-xl border border-gray-600 flex gap-2 z-10 shadow-lg">
             <button id="btnBuyBond" class="flex flex-col items-center justify-center w-20 h-20 bg-blue-900 hover:bg-blue-800 border border-blue-500 rounded transition relative group">
                 <span class="text-xs font-bold text-blue-200">債券タワー</span>
@@ -149,6 +165,7 @@
         let projectiles = [];
         let particles = [];
         let floatingTexts = [];
+        let selectedTower = null;
 
         // Economics (Supply & Demand Scaling)
         let costs = {
@@ -163,6 +180,14 @@
             realEstate: 1.3,
             upgrade: 1.5
         };
+
+        const towerUpgradeMultipliers = {
+            range: 1.08,
+            damage: 1.18,
+            cooldown: 0.92
+        };
+
+        const sellRefundRate = 0.65;
 
         // UI Elements
         const elGold = document.getElementById('goldDisplay');
@@ -421,7 +446,7 @@
         }
 
         class Tower {
-            constructor(x, y, type) {
+            constructor(x, y, type, buildCost) {
                 this.x = x;
                 this.y = y;
                 this.type = type;
@@ -430,6 +455,10 @@
                 this.cooldown = 0;
                 this.timer = 0;
                 this.color = '#fff';
+                this.level = 1;
+                this.buildCost = buildCost;
+                this.upgradeCost = Math.floor(buildCost * 0.8);
+                this.invested = buildCost;
 
                 if (type === 'bond') {
                     this.range = 150;
@@ -478,6 +507,12 @@
                 ctx.strokeStyle = '#fff';
                 ctx.lineWidth = 1;
                 ctx.strokeRect(this.x - 12, this.y - 12, 24, 24);
+
+                if (selectedTower === this) {
+                    ctx.strokeStyle = '#fbbf24';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(this.x - 15, this.y - 15, 30, 30);
+                }
                 
                 // Range circle (faint)
                 // ctx.beginPath();
@@ -490,7 +525,28 @@
                 ctx.fillStyle = '#fff';
                 ctx.font = '9px Arial';
                 ctx.textAlign = 'center';
-                ctx.fillText(this.label[0], this.x, this.y + 3);
+                ctx.fillText(`${this.label[0]}${this.level}`, this.x, this.y + 3);
+            }
+
+            attemptUpgrade() {
+                if (gold < this.upgradeCost) {
+                    createFloatingText(this.x, this.y - 24, '資金不足', '#ef4444');
+                    return false;
+                }
+
+                gold -= this.upgradeCost;
+                this.invested += this.upgradeCost;
+                this.level += 1;
+                this.range *= towerUpgradeMultipliers.range;
+                this.damage *= towerUpgradeMultipliers.damage;
+                this.cooldown *= towerUpgradeMultipliers.cooldown;
+                this.upgradeCost = Math.floor(this.upgradeCost * costMultipliers[this.type]);
+
+                createFloatingText(this.x, this.y - 24, `Lv.${this.level} 強化!`, '#fbbf24');
+                createParticle(this.x, this.y, 'click', this.color);
+                updateUI();
+                updateTowerPanel();
+                return true;
             }
         }
 
@@ -585,10 +641,20 @@
                     buildingMode = null;
                     document.body.style.cursor = 'default';
                 } else {
-                    // Move Hero
-                    hero.targetX = x;
-                    hero.targetY = y;
-                    createParticle(x, y, 'click', '#fff');
+                    const towerClicked = getTowerAt(x, y);
+                    if (towerClicked) {
+                        if (selectedTower === towerClicked) {
+                            towerClicked.attemptUpgrade();
+                        } else {
+                            selectTower(towerClicked);
+                        }
+                    } else {
+                        // Move Hero
+                        selectTower(null);
+                        hero.targetX = x;
+                        hero.targetY = y;
+                        createParticle(x, y, 'click', '#fff');
+                    }
                 }
             });
 
@@ -605,6 +671,8 @@
             btnBuyStock.addEventListener('click', (e) => setBuildMode('stock', e));
             btnBuyRealEstate.addEventListener('click', (e) => setBuildMode('realEstate', e));
             btnHeroUpgrade.addEventListener('click', upgradeHero);
+            document.getElementById('btnTowerUpgrade').addEventListener('click', upgradeSelectedTower);
+            document.getElementById('btnTowerSell').addEventListener('click', sellSelectedTower);
 
             document.getElementById('enemyInfo').innerText = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
             document.getElementById('enemyInfo').title = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
@@ -640,6 +708,8 @@
             
             // Reset Costs
             costs = { bond: 100, stock: 250, realEstate: 500, upgrade: 300 };
+            selectedTower = null;
+            updateTowerPanel();
 
             hero = new Hero();
             startWave();
@@ -647,7 +717,7 @@
         }
 
         function setBuildMode(type, e) {
-            e.stopPropagation(); // prevent canvas click
+            e?.stopPropagation(); // prevent canvas click
             if (gold >= costs[type]) {
                 buildingMode = type;
                 document.body.style.cursor = 'crosshair';
@@ -658,18 +728,80 @@
         }
 
         function buildTower(x, y, type) {
-            if (gold >= costs[type]) {
-                gold -= costs[type];
-                towers.push(new Tower(x, y, type));
+            const price = costs[type];
+            if (gold >= price) {
+                gold -= price;
+                towers.push(new Tower(x, y, type, price));
                 
                 // Economic Principle: Supply & Demand / Scarcity
-                costs[type] = Math.floor(costs[type] * costMultipliers[type]);
-                
+                costs[type] = Math.floor(price * costMultipliers[type]);
+
                 createFloatingText(x, y, "資産計上!", "#10b981");
                 createFloatingText(canvas.width/2, 100, `需要増により${type === 'bond' ? '債券' : type === 'stock' ? '株価' : '不動産価格'}上昇!`, "#fbbf24");
-                
+
+                selectTower(towers[towers.length - 1]);
+
                 updateUI();
             }
+        }
+
+        function upgradeSelectedTower(e) {
+            e?.stopPropagation();
+            if (!selectedTower) return;
+            selectedTower.attemptUpgrade();
+        }
+
+        function sellSelectedTower(e) {
+            e?.stopPropagation();
+            if (!selectedTower) return;
+            const tower = selectedTower;
+            const refund = Math.floor(tower.invested * sellRefundRate);
+            gold += refund;
+            towers = towers.filter(t => t !== tower);
+            createFloatingText(tower.x, tower.y, `売却 +¥${refund}`, '#34d399');
+            createFloatingText(canvas.width/2, canvas.height - 100, '再配置モードに移行', '#93c5fd');
+            updateUI();
+            selectTower(null);
+            setBuildMode(tower.type);
+        }
+
+        function selectTower(tower) {
+            selectedTower = tower;
+            updateTowerPanel();
+        }
+
+        function getTowerAt(x, y) {
+            return towers.find(t => Math.hypot(t.x - x, t.y - y) < 16);
+        }
+
+        function updateTowerPanel() {
+            const panel = document.getElementById('towerPanel');
+            const nameEl = document.getElementById('towerName');
+            const statsEl = document.getElementById('towerStats');
+            const upgradeCostEl = document.getElementById('towerUpgradeCost');
+            const sellRefundEl = document.getElementById('towerSellRefund');
+            const helperText = document.getElementById('towerCosts');
+
+            if (!panel) return;
+
+            if (!selectedTower) {
+                panel.classList.add('hidden');
+                nameEl.innerText = 'タワー未選択';
+                statsEl.innerText = '射程/ダメージ/クールダウン';
+                upgradeCostEl.innerText = '';
+                sellRefundEl.innerText = '';
+                helperText.innerText = 'タワーをクリックすると詳細が表示されます。';
+                return;
+            }
+
+            panel.classList.remove('hidden');
+            nameEl.innerText = `${selectedTower.label} Lv.${selectedTower.level}`;
+            statsEl.innerText = `射程: ${Math.round(selectedTower.range)} / ダメージ: ${selectedTower.damage.toFixed(1)} / CD: ${selectedTower.cooldown.toFixed(2)}s`;
+            upgradeCostEl.innerText = `¥${selectedTower.upgradeCost}`;
+            sellRefundEl.innerText = `¥${Math.floor(selectedTower.invested * sellRefundRate)}`;
+            helperText.innerText = '強化コストは市場インフレ係数と連動し、売却時は一部返戻されます。';
+
+            document.getElementById('btnTowerUpgrade').style.opacity = gold >= selectedTower.upgradeCost ? 1 : 0.5;
         }
 
         function upgradeHero(e) {
@@ -854,6 +986,8 @@
             btnBuyStock.style.opacity = gold >= costs.stock ? 1 : 0.5;
             btnBuyRealEstate.style.opacity = gold >= costs.realEstate ? 1 : 0.5;
             btnHeroUpgrade.style.opacity = gold >= costs.upgrade ? 1 : 0.5;
+
+            updateTowerPanel();
         }
 
         function gameLoop(timestamp) {
