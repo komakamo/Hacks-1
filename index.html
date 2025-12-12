@@ -37,7 +37,7 @@
 <body class="text-white h-screen w-screen flex flex-col">
 
     <!-- Header / HUD -->
-    <div class="absolute top-0 left-0 w-full p-2 bg-gray-900/90 border-b border-gray-700 z-10 flex justify-between items-center text-sm md:text-base">
+    <div class="absolute top-0 left-0 w-full p-2 bg-gray-900/90 border-b border-gray-700 z-10 flex justify-between items-start text-sm md:text-base gap-4">
         <div class="flex gap-4">
             <div class="flex flex-col">
                 <span class="text-yellow-400 font-bold">資金 (流動性)</span>
@@ -52,15 +52,31 @@
                 <span id="scoreDisplay">0</span>
             </div>
         </div>
-        <div class="flex flex-col text-right">
-            <span class="text-red-500 font-bold">インフレ波 (Wave)</span>
-            <span id="waveDisplay" class="text-xl">1</span>
+        <div class="flex items-start gap-4">
+            <div class="flex flex-col text-right">
+                <span class="text-red-500 font-bold">インフレ波 (Wave)</span>
+                <span id="waveDisplay" class="text-xl">1</span>
+            </div>
+            <div class="flex flex-col text-right">
+                <span class="text-emerald-400 font-bold">国庫HP</span>
+                <div class="flex items-baseline gap-2 justify-end">
+                    <span id="baseHealthDisplay" class="text-xl">100%</span>
+                    <span id="baseHealthStatus" class="text-xs text-gray-300">安定</span>
+                </div>
+                <span id="baseHealthWarning" class="text-xs text-red-400 font-bold"></span>
+            </div>
+            <div id="enemyInfo" class="text-xs text-gray-300 max-w-xs pl-4 text-left"></div>
         </div>
-        <div id="enemyInfo" class="text-xs text-gray-300 max-w-xs pl-4"></div>
     </div>
 
     <!-- Game Container -->
         <div class="relative flex-grow flex justify-center items-center bg-gray-800" id="gameContainer">
+            <div id="damageFlash" class="absolute inset-0 bg-red-600 opacity-0 pointer-events-none transition-opacity duration-200 ease-out z-20"></div>
+            <div id="hpHud" class="absolute top-16 right-4 bg-black/60 border border-red-500/50 rounded-lg px-3 py-2 text-xs md:text-sm text-right space-y-1 z-20 shadow-lg">
+                <div id="hudHpPercent" class="text-lg font-bold text-emerald-300">残りHP 100%</div>
+                <div id="hudHpWarning" class="text-yellow-300"></div>
+                <div id="hudNextHit" class="text-red-400 font-bold"></div>
+            </div>
             <canvas id="gameCanvas"></canvas>
 
             <!-- Tower Management Panel -->
@@ -149,6 +165,14 @@
         let wave = 1;
         let baseHealth = 100;
         let maxBaseHealth = 100;
+        let screenShakeTimer = 0;
+        let screenShakeDuration = 0;
+        let screenShakeIntensity = 0;
+        let baseShakeTimer = 0;
+        let baseShakeDuration = 0;
+        let baseShakeIntensity = 0;
+        let lastWarningBeep = 0;
+        let audioCtx = null;
         let interestRate = 0.05; // 5% per cycle
         let interestTimer = 0;
         const interestInterval = 5000; // 5 seconds
@@ -198,6 +222,13 @@
         const elTitle = document.getElementById('modalTitle');
         const elDesc = document.getElementById('modalDesc');
         const elBtnStart = document.getElementById('btnStart');
+        const elBaseHealthDisplay = document.getElementById('baseHealthDisplay');
+        const elBaseHealthStatus = document.getElementById('baseHealthStatus');
+        const elBaseHealthWarning = document.getElementById('baseHealthWarning');
+        const elHudHpPercent = document.getElementById('hudHpPercent');
+        const elHudHpWarning = document.getElementById('hudHpWarning');
+        const elHudNextHit = document.getElementById('hudNextHit');
+        const elDamageFlash = document.getElementById('damageFlash');
         
         const btnBuyBond = document.getElementById('btnBuyBond');
         const btnBuyStock = document.getElementById('btnBuyStock');
@@ -677,6 +708,8 @@
             document.getElementById('enemyInfo').innerText = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
             document.getElementById('enemyInfo').title = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
 
+            updateBaseStatus();
+
             // Game Loop
             requestAnimationFrame(gameLoop);
         }
@@ -694,7 +727,13 @@
             gold = 1000;
             score = 0;
             wave = 1;
-            baseHealth = 100;
+            baseHealth = maxBaseHealth;
+            screenShakeTimer = 0;
+            baseShakeTimer = 0;
+            if (elDamageFlash) elDamageFlash.style.opacity = '0';
+            if (elHudHpWarning) elHudHpWarning.innerText = '';
+            if (elHudNextHit) elHudNextHit.innerText = '';
+            updateBaseStatus();
             interestTimer = 0;
             spawnQueue = [];
             enemies = [];
@@ -907,8 +946,14 @@
         }
 
         function takeBaseDamage(amount) {
-            baseHealth -= amount;
-            // Screen shake effect logic could go here
+            baseHealth = Math.max(0, baseHealth - amount);
+            triggerScreenShake(10, 0.4);
+            triggerBaseShake(6, 0.45);
+            triggerDamageFlash();
+            if ((baseHealth / maxBaseHealth) <= 0.35) {
+                playWarningBeep();
+            }
+            updateBaseStatus();
             if (baseHealth <= 0) {
                 endGame();
             }
@@ -919,7 +964,7 @@
             elModal.classList.remove('hidden');
             elTitle.innerText = "経済崩壊 (Game Over)";
             elTitle.className = "text-4xl md:text-6xl font-bold text-red-500 mb-4 retro-text";
-            elDesc.innerHTML = `あなたのGDP: <span class="text-yellow-400 font-bold">¥${score}</span><br>到達ウェーブ: ${wave}<br><br>インフレに耐えきれませんでした。<br>次こそは適切な市場介入を。`;
+            elDesc.innerHTML = `あなたのGDP: <span class="text-yellow-400 font-bold">¥${score}</span><br>到達ウェーブ: ${wave}<br><br>国庫HPが0%になりました。<br>インフレに耐えきれませんでした。<br>HUD警告を活用し、次こそは適切な市場介入を。`;
             elBtnStart.innerText = "経済再建 (Retry)";
         }
 
@@ -970,6 +1015,110 @@
             }
         }
 
+        function triggerScreenShake(intensity = 6, duration = 0.35) {
+            screenShakeIntensity = intensity;
+            screenShakeDuration = duration;
+            screenShakeTimer = duration;
+        }
+
+        function triggerBaseShake(intensity = 3, duration = 0.35) {
+            baseShakeIntensity = intensity;
+            baseShakeDuration = duration;
+            baseShakeTimer = duration;
+        }
+
+        function triggerDamageFlash() {
+            if (!elDamageFlash) return;
+            elDamageFlash.style.opacity = '0.5';
+            setTimeout(() => {
+                elDamageFlash.style.opacity = '0';
+            }, 180);
+        }
+
+        function playWarningBeep() {
+            const now = Date.now();
+            if (now - lastWarningBeep < 1200) return;
+            lastWarningBeep = now;
+
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            if (!audioCtx) audioCtx = new Ctx();
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(520, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.22, audioCtx.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.5);
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.55);
+        }
+
+        function getBaseColorByRatio(ratio) {
+            if (ratio > 0.6) return '#10b981';
+            if (ratio > 0.3) return '#fbbf24';
+            return '#ef4444';
+        }
+
+        function updateBaseStatus() {
+            const hpRatio = Math.max(0, baseHealth) / maxBaseHealth;
+            const percentText = `${Math.max(0, Math.floor(hpRatio * 100))}%`;
+            const statusText = hpRatio > 0.6 ? '安定' : hpRatio > 0.3 ? '要警戒' : '危険';
+            const colorClass = hpRatio > 0.6 ? 'text-emerald-300' : hpRatio > 0.3 ? 'text-yellow-200' : 'text-red-300';
+            const cautionText = hpRatio > 0.6 ? '' : hpRatio > 0.3 ? '国庫損耗中。防衛を強化！' : '国庫が危険域！即応が必要です';
+            const nextHitText = hpRatio <= 0.12 ? '次の被弾で経済崩壊の恐れ！' : hpRatio <= 0.25 ? 'あと一歩で崩壊します' : '';
+
+            if (elBaseHealthDisplay) elBaseHealthDisplay.innerText = percentText;
+            if (elBaseHealthStatus) {
+                elBaseHealthStatus.innerText = statusText;
+                elBaseHealthStatus.className = `text-xs ${colorClass}`;
+            }
+            if (elBaseHealthWarning) elBaseHealthWarning.innerText = cautionText;
+
+            if (elHudHpPercent) {
+                elHudHpPercent.innerText = `残りHP ${percentText}`;
+                elHudHpPercent.className = `text-lg font-bold ${colorClass}`;
+            }
+            if (elHudHpWarning) elHudHpWarning.innerText = cautionText;
+            if (elHudNextHit) elHudNextHit.innerText = nextHitText;
+        }
+
+        function drawBase() {
+            const hpRatio = Math.max(0, baseHealth) / maxBaseHealth;
+            const baseColor = getBaseColorByRatio(hpRatio);
+            const decay = baseShakeDuration > 0 ? Math.min(1, baseShakeTimer / baseShakeDuration) : 0;
+            const baseJitterX = baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0;
+            const baseJitterY = baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0;
+            const centerX = canvas.width/2 + baseJitterX;
+            const centerY = canvas.height/2 + baseJitterY;
+            const percentDisplay = Math.max(0, Math.floor(hpRatio * 100));
+
+            ctx.save();
+            ctx.strokeStyle = '#1f2937';
+            ctx.lineWidth = 8;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 40, 0, Math.PI * 2);
+            ctx.stroke();
+
+            ctx.strokeStyle = baseColor;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 40, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hpRatio);
+            ctx.stroke();
+
+            ctx.fillStyle = '#111827';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 30, 0, Math.PI*2);
+            ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`国庫: ${percentDisplay}%`, centerX, centerY + 5);
+            ctx.restore();
+        }
+
         function updateUI() {
             elGold.innerText = `¥${gold.toLocaleString()}`;
             elScore.innerText = `¥${score.toLocaleString()}`;
@@ -988,24 +1137,36 @@
             btnHeroUpgrade.style.opacity = gold >= costs.upgrade ? 1 : 0.5;
 
             updateTowerPanel();
+            updateBaseStatus();
         }
 
         function gameLoop(timestamp) {
             const dt = (timestamp - lastTime) / 1000;
             lastTime = timestamp;
 
+            if (screenShakeTimer > 0) {
+                screenShakeTimer = Math.max(0, screenShakeTimer - dt);
+            }
+            if (baseShakeTimer > 0) {
+                baseShakeTimer = Math.max(0, baseShakeTimer - dt);
+            }
+
             if (gameState === 'PLAYING') {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                // Draw Base (Central Bank/Treasury)
-                ctx.fillStyle = '#f59e0b';
-                ctx.beginPath();
-                ctx.arc(canvas.width/2, canvas.height/2, 30, 0, Math.PI*2);
-                ctx.fill();
-                ctx.fillStyle = '#fff';
-                ctx.font = '12px Arial';
-                ctx.textAlign = 'center';
-                ctx.fillText(`国庫: ${Math.floor(baseHealth)}%`, canvas.width/2, canvas.height/2 + 5);
+                let shakeX = 0;
+                let shakeY = 0;
+                if (screenShakeTimer > 0 && screenShakeDuration > 0) {
+                    const progress = screenShakeTimer / screenShakeDuration;
+                    const intensity = screenShakeIntensity * progress;
+                    shakeX = (Math.random() * 2 - 1) * intensity;
+                    shakeY = (Math.random() * 2 - 1) * intensity;
+                }
+
+                ctx.save();
+                ctx.translate(shakeX, shakeY);
+
+                drawBase();
 
                 // Spawning Logic
                 if (enemiesToSpawn > 0) {
@@ -1059,6 +1220,8 @@
                     ctx.stroke();
                     ctx.setLineDash([]);
                 }
+
+                ctx.restore();
             }
 
             requestAnimationFrame(gameLoop);
