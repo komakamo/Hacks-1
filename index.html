@@ -56,6 +56,7 @@
             <span class="text-red-500 font-bold">インフレ波 (Wave)</span>
             <span id="waveDisplay" class="text-xl">1</span>
         </div>
+        <div id="enemyInfo" class="text-xs text-gray-300 max-w-xs pl-4"></div>
     </div>
 
     <!-- Game Container -->
@@ -139,6 +140,7 @@
         let enemiesToSpawn = 0;
         let spawnInterval = 0;
         let spawnTimer = 0;
+        let spawnQueue = [];
 
         // Entities
         let hero;
@@ -181,6 +183,65 @@
         let mouseX = 0;
         let mouseY = 0;
         let buildingMode = null; // 'bond', 'stock', 'realEstate' or null
+
+        // --- Enemy Type Definitions ---
+        const enemyTypes = {
+            basic: {
+                label: 'インフレゴースト',
+                color: '#ef4444',
+                barColor: '#10b981',
+                hp: 30,
+                speed: 40,
+                rewardMult: 1,
+                radius: 10,
+                description: '標準的なインフレの化身。癖はないが数で押してくる。'
+            },
+            fast: {
+                label: '高速投機家',
+                color: '#f97316',
+                barColor: '#facc15',
+                hp: 22,
+                speed: 80,
+                rewardMult: 1.1,
+                radius: 9,
+                description: '低耐久だが素早く国庫に到達しようとするスプリンター。'
+            },
+            tank: {
+                label: '重課税ゾンビ',
+                color: '#60a5fa',
+                barColor: '#3b82f6',
+                hp: 80,
+                speed: 25,
+                rewardMult: 1.4,
+                radius: 12,
+                description: '鈍足だが頑丈。長期的に財政を圧迫する。'
+            },
+            healer: {
+                label: '公共投資家',
+                color: '#a855f7',
+                barColor: '#c084fc',
+                hp: 55,
+                speed: 35,
+                rewardMult: 1.2,
+                radius: 11,
+                healAmount: 12,
+                healRadius: 90,
+                healCooldown: 2.5,
+                description: '周囲のインフレ圧力を回復させる。放置すると長期戦に。'
+            },
+            boss: {
+                label: 'バブルボス',
+                color: '#fde047',
+                barColor: '#fbbf24',
+                hp: 280,
+                speed: 30,
+                rewardMult: 6,
+                radius: 16,
+                description: '特定ウェーブで出現する巨悪。莫大な損失と報酬をもたらす。'
+            }
+        };
+
+        const discoveredEnemyTypes = new Set(['basic']);
 
         // --- Classes ---
 
@@ -254,7 +315,10 @@
         }
 
         class Enemy {
-            constructor(wave) {
+            constructor(wave, typeKey = 'basic') {
+                this.typeKey = typeKey;
+                this.type = enemyTypes[typeKey] || enemyTypes.basic;
+
                 // Spawn at random edge
                 if (Math.random() < 0.5) {
                     this.x = Math.random() < 0.5 ? -20 : canvas.width + 20;
@@ -263,25 +327,49 @@
                     this.x = Math.random() * canvas.width;
                     this.y = Math.random() < 0.5 ? -20 : canvas.height + 20;
                 }
-                
+
                 this.targetX = canvas.width / 2;
                 this.targetY = canvas.height / 2;
-                
+
                 // Stats scale with wave (Inflation)
                 const inflationRate = 1 + (wave * 0.15);
-                this.hp = 30 * inflationRate;
+                const waveSpeedBonus = wave * 2;
+                this.hp = this.type.hp * inflationRate;
                 this.maxHp = this.hp;
-                this.speed = 40 + (wave * 2);
-                this.reward = Math.floor(15 * (1 + wave * 0.05));
-                this.radius = 10;
-                this.color = '#ef4444'; // Red (Deficit/Inflation)
+                this.speed = this.type.speed + waveSpeedBonus;
+                const baseReward = 15 * (1 + wave * 0.05);
+                this.reward = Math.floor(baseReward * this.type.rewardMult);
+                this.radius = this.type.radius;
+                this.color = this.type.color;
+                this.barColor = this.type.barColor;
                 this.frozen = 0; // Slow effect
+
+                if (this.type.healAmount) {
+                    this.healTimer = 0;
+                }
             }
 
             update(dt) {
                 if (this.frozen > 0) this.frozen -= dt;
                 
                 let currentSpeed = this.frozen > 0 ? this.speed * 0.5 : this.speed;
+
+                if (this.type.healAmount) {
+                    this.healTimer += dt;
+                    if (this.healTimer >= this.type.healCooldown) {
+                        this.healTimer = 0;
+                        enemies.forEach(e => {
+                            if (e === this || e.dead) return;
+                            const dxh = e.x - this.x;
+                            const dyh = e.y - this.y;
+                            const dsth = Math.sqrt(dxh*dxh + dyh*dyh);
+                            if (dsth <= this.type.healRadius && e.hp < e.maxHp) {
+                                e.hp = Math.min(e.maxHp, e.hp + this.type.healAmount);
+                                createFloatingText(e.x, e.y - 20, '+回復', '#a855f7');
+                            }
+                        });
+                    }
+                }
 
                 const dx = this.targetX - this.x;
                 const dy = this.targetY - this.y;
@@ -316,13 +404,19 @@
                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
                 ctx.fillStyle = this.frozen > 0 ? '#3b82f6' : this.color;
                 ctx.fill();
-                
+
                 // Health bar
                 const hpPct = this.hp / this.maxHp;
-                ctx.fillStyle = 'red';
+                ctx.fillStyle = '#1f2937';
                 ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
-                ctx.fillStyle = '#10b981';
+                ctx.fillStyle = this.barColor || '#10b981';
                 ctx.fillRect(this.x - 10, this.y - 15, 20 * hpPct, 3);
+
+                // Type label
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '9px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.type.label, this.x, this.y + this.radius + 10);
             }
         }
 
@@ -512,6 +606,9 @@
             btnBuyRealEstate.addEventListener('click', (e) => setBuildMode('realEstate', e));
             btnHeroUpgrade.addEventListener('click', upgradeHero);
 
+            document.getElementById('enemyInfo').innerText = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
+            document.getElementById('enemyInfo').title = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
+
             // Game Loop
             requestAnimationFrame(gameLoop);
         }
@@ -524,17 +621,22 @@
         function startGame() {
             gameState = 'PLAYING';
             elModal.classList.add('hidden');
-            
+
             // Reset Vars
             gold = 1000;
             score = 0;
             wave = 1;
             baseHealth = 100;
             interestTimer = 0;
+            spawnQueue = [];
             enemies = [];
             towers = [];
             projectiles = [];
             particles = [];
+            discoveredEnemyTypes.clear();
+            discoveredEnemyTypes.add('basic');
+            document.getElementById('enemyInfo').innerText = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
+            document.getElementById('enemyInfo').title = `${enemyTypes.basic.label}: ${enemyTypes.basic.description}`;
             
             // Reset Costs
             costs = { bond: 100, stock: 250, realEstate: 500, upgrade: 300 };
@@ -582,22 +684,94 @@
             }
         }
 
+        function getWaveComposition(wave) {
+            const baseCount = 5 + Math.floor(wave * 2.5);
+
+            const pools = [
+                { maxWave: 2, data: [{ type: 'basic', weight: 1 }] },
+                { maxWave: 4, data: [{ type: 'basic', weight: 0.7 }, { type: 'fast', weight: 0.3 }] },
+                { maxWave: 6, data: [{ type: 'basic', weight: 0.55 }, { type: 'fast', weight: 0.25 }, { type: 'tank', weight: 0.2 }] },
+                { maxWave: 9, data: [{ type: 'basic', weight: 0.45 }, { type: 'fast', weight: 0.25 }, { type: 'tank', weight: 0.2 }, { type: 'healer', weight: 0.1 }] }
+            ];
+
+            let pool = pools[pools.length - 1].data;
+            for (const p of pools) {
+                if (wave <= p.maxWave) { pool = p.data; break; }
+            }
+
+            if (wave >= 10 && wave % 5 === 0) {
+                return { count: baseCount, interval: Math.max(0.6, 2.0 - (wave * 0.1)), pool, boss: true };
+            }
+
+            return { count: baseCount, interval: Math.max(0.6, 2.0 - (wave * 0.1)), pool };
+        }
+
+        function buildSpawnQueue(composition) {
+            const queue = [];
+            const pool = composition.pool;
+            const totalWeight = pool.reduce((sum, p) => sum + p.weight, 0);
+
+            const pickType = () => {
+                let roll = Math.random() * totalWeight;
+                for (const p of pool) {
+                    roll -= p.weight;
+                    if (roll <= 0) return p.type;
+                }
+                return pool[0].type;
+            };
+
+            for (let i = 0; i < composition.count; i++) {
+                queue.push(pickType());
+            }
+
+            if (composition.boss) {
+                queue.push('boss');
+            }
+
+            return queue;
+        }
+
+        function announceNewEnemies(types) {
+            const messages = [];
+            types.forEach(t => {
+                if (!discoveredEnemyTypes.has(t)) {
+                    discoveredEnemyTypes.add(t);
+                    messages.push(`${enemyTypes[t].label}: ${enemyTypes[t].description}`);
+                }
+            });
+            if (messages.length > 0) {
+                const info = messages.join(' / ');
+                createFloatingText(canvas.width/2, canvas.height/2 - 30, `新敵出現! ${info}`, '#fbbf24');
+                document.getElementById('enemyInfo').innerText = info;
+                document.getElementById('enemyInfo').title = info;
+            }
+        }
+
         function startWave() {
             waveTimer = 0;
-            enemiesToSpawn = 5 + Math.floor(wave * 2.5);
-            spawnInterval = Math.max(0.5, 2.0 - (wave * 0.1));
+            const composition = getWaveComposition(wave);
+            spawnQueue = buildSpawnQueue(composition);
+            enemiesToSpawn = spawnQueue.length;
+            spawnInterval = composition.interval;
             spawnTimer = 0;
             elWave.innerText = wave;
-            
+
             // Increase interest rate slightly per wave (Central bank adjustment)
-            interestRate = Math.min(0.20, 0.05 + (wave * 0.005)); 
-            
+            interestRate = Math.min(0.20, 0.05 + (wave * 0.005));
+
             createFloatingText(canvas.width/2, canvas.height/2, `インフレ波 ${wave} 到来!`, "#ef4444");
+            const uniqueTypes = new Set(spawnQueue);
+            uniqueTypes.delete('basic');
+            announceNewEnemies(uniqueTypes);
+            if (composition.boss) {
+                createFloatingText(canvas.width/2, canvas.height/2 + 30, `${enemyTypes.boss.label}が市場を揺らす!`, '#fde047');
+            }
         }
 
         function spawnEnemy() {
-            enemies.push(new Enemy(wave));
-            enemiesToSpawn--;
+            const type = spawnQueue.shift() || 'basic';
+            enemies.push(new Enemy(wave, type));
+            enemiesToSpawn = spawnQueue.length;
         }
 
         function takeBaseDamage(amount) {
