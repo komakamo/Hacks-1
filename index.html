@@ -1,1 +1,764 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>エコノミー・ヒーロー：見えざる手</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Kosugi+Maru&display=swap');
+        body {
+            font-family: 'Kosugi Maru', sans-serif;
+            background-color: #1a202c;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+        .retro-text {
+            text-shadow: 2px 2px 0px #000;
+        }
+        /* UI Overlay animations */
+        @keyframes floatUp {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-20px); opacity: 0; }
+        }
+        .floating-text {
+            position: absolute;
+            pointer-events: none;
+            animation: floatUp 1s ease-out forwards;
+            font-weight: bold;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body class="text-white h-screen w-screen flex flex-col">
 
+    <!-- Header / HUD -->
+    <div class="absolute top-0 left-0 w-full p-2 bg-gray-900/90 border-b border-gray-700 z-10 flex justify-between items-center text-sm md:text-base">
+        <div class="flex gap-4">
+            <div class="flex flex-col">
+                <span class="text-yellow-400 font-bold">資金 (流動性)</span>
+                <span id="goldDisplay" class="text-xl">¥1,000</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-green-400 font-bold">利率 (複利)</span>
+                <span id="interestDisplay">5.0% / 5秒</span>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-blue-400 font-bold">GDP (スコア)</span>
+                <span id="scoreDisplay">0</span>
+            </div>
+        </div>
+        <div class="flex flex-col text-right">
+            <span class="text-red-500 font-bold">インフレ波 (Wave)</span>
+            <span id="waveDisplay" class="text-xl">1</span>
+        </div>
+    </div>
+
+    <!-- Game Container -->
+    <div class="relative flex-grow flex justify-center items-center bg-gray-800" id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <!-- Action Bar (Bottom) -->
+        <div class="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-900/90 p-2 rounded-xl border border-gray-600 flex gap-2 z-10 shadow-lg">
+            <button id="btnBuyBond" class="flex flex-col items-center justify-center w-20 h-20 bg-blue-900 hover:bg-blue-800 border border-blue-500 rounded transition relative group">
+                <span class="text-xs font-bold text-blue-200">債券タワー</span>
+                <span id="costBond" class="text-xs text-yellow-300">¥100</span>
+                <div class="text-[10px] text-gray-400 mt-1">射程:中 連射:中</div>
+                <!-- Tooltip -->
+                <div class="absolute bottom-full mb-2 hidden group-hover:block w-48 bg-black text-xs p-2 rounded border border-gray-600">
+                    安定資産。バランスが良い防衛タワー。
+                </div>
+            </button>
+
+            <button id="btnBuyStock" class="flex flex-col items-center justify-center w-20 h-20 bg-red-900 hover:bg-red-800 border border-red-500 rounded transition relative group">
+                <span class="text-xs font-bold text-red-200">株式タワー</span>
+                <span id="costStock" class="text-xs text-yellow-300">¥250</span>
+                <div class="text-[10px] text-gray-400 mt-1">射程:短 威力:高</div>
+                <div class="absolute bottom-full mb-2 hidden group-hover:block w-48 bg-black text-xs p-2 rounded border border-gray-600">
+                    ハイリスク・ハイリターン。高火力だが範囲が狭い。
+                </div>
+            </button>
+
+            <button id="btnBuyRealEstate" class="flex flex-col items-center justify-center w-20 h-20 bg-green-900 hover:bg-green-800 border border-green-500 rounded transition relative group">
+                <span class="text-xs font-bold text-green-200">不動産壁</span>
+                <span id="costRealEstate" class="text-xs text-yellow-300">¥500</span>
+                <div class="text-[10px] text-gray-400 mt-1">耐久:高 減速</div>
+                <div class="absolute bottom-full mb-2 hidden group-hover:block w-48 bg-black text-xs p-2 rounded border border-gray-600">
+                    敵の進行を物理的に阻む資産。
+                </div>
+            </button>
+
+             <button id="btnHeroUpgrade" class="flex flex-col items-center justify-center w-20 h-20 bg-purple-900 hover:bg-purple-800 border border-purple-500 rounded transition relative group ml-4">
+                <span class="text-xs font-bold text-purple-200">人材投資</span>
+                <span id="costUpgrade" class="text-xs text-yellow-300">¥300</span>
+                <div class="text-[10px] text-gray-400 mt-1">自己研鑽</div>
+                <div class="absolute bottom-full mb-2 hidden group-hover:block w-48 bg-black text-xs p-2 rounded border border-gray-600">
+                    ヒーローの攻撃力と移動速度を上げます（生産性向上）。
+                </div>
+            </button>
+        </div>
+
+        <!-- Start/Game Over Screen -->
+        <div id="modalScreen" class="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-20">
+            <h1 id="modalTitle" class="text-4xl md:text-6xl font-bold text-yellow-400 mb-4 retro-text">Economy Hero</h1>
+            <p id="modalDesc" class="text-gray-300 mb-8 max-w-md text-center leading-relaxed p-4">
+                あなたは経済を守るヒーローです。<br><br>
+                1. 画面クリックで移動＆自動攻撃。<br>
+                2. 敵が中央の「国庫」に到達するとゲームオーバー。<br>
+                3. <span class="text-green-400 font-bold">お金を貯めると複利（利子）で増えます！</span><br>
+                4. タワー（資産）を買いすぎると価格が上がります（需給の法則）。
+            </p>
+            <button id="btnStart" class="px-8 py-3 bg-yellow-500 hover:bg-yellow-400 text-black font-bold rounded text-xl transition transform hover:scale-105">
+                市場介入開始 (Start)
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- Game Configuration & State ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('gameContainer');
+
+        // State
+        let gameState = 'START'; // START, PLAYING, GAMEOVER
+        let lastTime = 0;
+        let gold = 1000;
+        let score = 0; // Represents GDP
+        let wave = 1;
+        let baseHealth = 100;
+        let maxBaseHealth = 100;
+        let interestRate = 0.05; // 5% per cycle
+        let interestTimer = 0;
+        const interestInterval = 5000; // 5 seconds
+        let waveTimer = 0;
+        let enemiesToSpawn = 0;
+        let spawnInterval = 0;
+        let spawnTimer = 0;
+
+        // Entities
+        let hero;
+        let enemies = [];
+        let towers = [];
+        let projectiles = [];
+        let particles = [];
+        let floatingTexts = [];
+
+        // Economics (Supply & Demand Scaling)
+        let costs = {
+            bond: 100,
+            stock: 250,
+            realEstate: 500,
+            upgrade: 300
+        };
+        const costMultipliers = {
+            bond: 1.15,
+            stock: 1.25,
+            realEstate: 1.3,
+            upgrade: 1.5
+        };
+
+        // UI Elements
+        const elGold = document.getElementById('goldDisplay');
+        const elInterest = document.getElementById('interestDisplay');
+        const elScore = document.getElementById('scoreDisplay');
+        const elWave = document.getElementById('waveDisplay');
+        const elModal = document.getElementById('modalScreen');
+        const elTitle = document.getElementById('modalTitle');
+        const elDesc = document.getElementById('modalDesc');
+        const elBtnStart = document.getElementById('btnStart');
+        
+        const btnBuyBond = document.getElementById('btnBuyBond');
+        const btnBuyStock = document.getElementById('btnBuyStock');
+        const btnBuyRealEstate = document.getElementById('btnBuyRealEstate');
+        const btnHeroUpgrade = document.getElementById('btnHeroUpgrade');
+
+        // Input
+        let mouseX = 0;
+        let mouseY = 0;
+        let buildingMode = null; // 'bond', 'stock', 'realEstate' or null
+
+        // --- Classes ---
+
+        class Hero {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height / 2 + 50;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.speed = 180; // pixels per second
+                this.radius = 12;
+                this.color = '#a78bfa'; // Purple
+                this.damage = 25;
+                this.attackRange = 100;
+                this.attackCooldown = 0.5; // seconds
+                this.attackTimer = 0;
+                this.level = 1;
+            }
+
+            update(dt) {
+                // Movement
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist > 5) {
+                    this.x += (dx / dist) * this.speed * dt;
+                    this.y += (dy / dist) * this.speed * dt;
+                }
+
+                // Auto Attack
+                this.attackTimer -= dt;
+                if (this.attackTimer <= 0) {
+                    const target = getNearestEnemy(this.x, this.y, this.attackRange);
+                    if (target) {
+                        this.attack(target);
+                        this.attackTimer = this.attackCooldown;
+                    }
+                }
+            }
+
+            attack(target) {
+                // Visual Slash Effect
+                createParticle(target.x, target.y, 'slash', this.color);
+                target.takeDamage(this.damage);
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#fff';
+                ctx.stroke();
+
+                // Level Indicator
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`Lv.${this.level}`, this.x, this.y - 15);
+            }
+
+            upgrade() {
+                this.level++;
+                this.damage *= 1.2;
+                this.speed *= 1.1;
+                this.attackCooldown *= 0.9;
+                createFloatingText(this.x, this.y, "生産性向上!", "#d8b4fe");
+            }
+        }
+
+        class Enemy {
+            constructor(wave) {
+                // Spawn at random edge
+                if (Math.random() < 0.5) {
+                    this.x = Math.random() < 0.5 ? -20 : canvas.width + 20;
+                    this.y = Math.random() * canvas.height;
+                } else {
+                    this.x = Math.random() * canvas.width;
+                    this.y = Math.random() < 0.5 ? -20 : canvas.height + 20;
+                }
+                
+                this.targetX = canvas.width / 2;
+                this.targetY = canvas.height / 2;
+                
+                // Stats scale with wave (Inflation)
+                const inflationRate = 1 + (wave * 0.15);
+                this.hp = 30 * inflationRate;
+                this.maxHp = this.hp;
+                this.speed = 40 + (wave * 2);
+                this.reward = Math.floor(15 * (1 + wave * 0.05));
+                this.radius = 10;
+                this.color = '#ef4444'; // Red (Deficit/Inflation)
+                this.frozen = 0; // Slow effect
+            }
+
+            update(dt) {
+                if (this.frozen > 0) this.frozen -= dt;
+                
+                let currentSpeed = this.frozen > 0 ? this.speed * 0.5 : this.speed;
+
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 20) {
+                    // Hit base
+                    takeBaseDamage(10);
+                    this.dead = true;
+                    createFloatingText(this.x, this.y, "-資産価値", "#ff0000");
+                } else {
+                    this.x += (dx / dist) * currentSpeed * dt;
+                    this.y += (dy / dist) * currentSpeed * dt;
+                }
+            }
+
+            takeDamage(amount) {
+                this.hp -= amount;
+                createFloatingText(this.x, this.y, Math.floor(amount), "#fff");
+                if (this.hp <= 0) {
+                    this.dead = true;
+                    gold += this.reward;
+                    score += this.reward;
+                    createFloatingText(this.x, this.y, `+¥${this.reward}`, "#fbbf24");
+                    createParticle(this.x, this.y, 'explosion', this.color);
+                    updateUI();
+                }
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.frozen > 0 ? '#3b82f6' : this.color;
+                ctx.fill();
+                
+                // Health bar
+                const hpPct = this.hp / this.maxHp;
+                ctx.fillStyle = 'red';
+                ctx.fillRect(this.x - 10, this.y - 15, 20, 3);
+                ctx.fillStyle = '#10b981';
+                ctx.fillRect(this.x - 10, this.y - 15, 20 * hpPct, 3);
+            }
+        }
+
+        class Tower {
+            constructor(x, y, type) {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.range = 0;
+                this.damage = 0;
+                this.cooldown = 0;
+                this.timer = 0;
+                this.color = '#fff';
+
+                if (type === 'bond') {
+                    this.range = 150;
+                    this.damage = 15;
+                    this.cooldown = 1.0;
+                    this.color = '#3b82f6'; // Blue
+                    this.label = "債券";
+                } else if (type === 'stock') {
+                    this.range = 100;
+                    this.damage = 45;
+                    this.cooldown = 1.5;
+                    this.color = '#ef4444'; // Red
+                    this.label = "株式";
+                } else if (type === 'realEstate') {
+                    this.range = 60;
+                    this.damage = 5;
+                    this.cooldown = 0.2; // Slow aura
+                    this.color = '#10b981'; // Green
+                    this.label = "不動産";
+                }
+            }
+
+            update(dt) {
+                this.timer -= dt;
+                if (this.timer <= 0) {
+                    const target = getNearestEnemy(this.x, this.y, this.range);
+                    if (target) {
+                        if (this.type === 'realEstate') {
+                            // Slow aura effect
+                            target.frozen = 0.5;
+                            target.takeDamage(this.damage);
+                            this.timer = this.cooldown;
+                            createParticle(target.x, target.y, 'slow', this.color);
+                        } else {
+                            // Shoot projectile
+                            projectiles.push(new Projectile(this.x, this.y, target, this.damage, this.color));
+                            this.timer = this.cooldown;
+                        }
+                    }
+                }
+            }
+
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x - 12, this.y - 12, 24, 24);
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(this.x - 12, this.y - 12, 24, 24);
+                
+                // Range circle (faint)
+                // ctx.beginPath();
+                // ctx.arc(this.x, this.y, this.range, 0, Math.PI * 2);
+                // ctx.strokeStyle = this.color;
+                // ctx.globalAlpha = 0.1;
+                // ctx.stroke();
+                // ctx.globalAlpha = 1.0;
+
+                ctx.fillStyle = '#fff';
+                ctx.font = '9px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.label[0], this.x, this.y + 3);
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, target, damage, color) {
+                this.x = x;
+                this.y = y;
+                this.target = target;
+                this.damage = damage;
+                this.color = color;
+                this.speed = 300;
+                this.dead = false;
+            }
+
+            update(dt) {
+                if (this.target.dead) {
+                    this.dead = true;
+                    return;
+                }
+
+                const dx = this.target.x - this.x;
+                const dy = this.target.y - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 10) {
+                    this.target.takeDamage(this.damage);
+                    this.dead = true;
+                } else {
+                    this.x += (dx / dist) * this.speed * dt;
+                    this.y += (dy / dist) * this.speed * dt;
+                }
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, type, color) {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.color = color;
+                this.life = 0.5; // seconds
+                this.vx = (Math.random() - 0.5) * 100;
+                this.vy = (Math.random() - 0.5) * 100;
+            }
+
+            update(dt) {
+                this.life -= dt;
+                this.x += this.vx * dt;
+                this.y += this.vy * dt;
+            }
+
+            draw(ctx) {
+                ctx.globalAlpha = this.life * 2;
+                if (this.type === 'slash') {
+                    ctx.beginPath();
+                    ctx.moveTo(this.x, this.y);
+                    ctx.lineTo(this.x + this.vx/5, this.y + this.vy/5);
+                    ctx.strokeStyle = this.color;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    ctx.fillStyle = this.color;
+                    ctx.fillRect(this.x, this.y, 3, 3);
+                }
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // --- Core Functions ---
+
+        function init() {
+            resize();
+            window.addEventListener('resize', resize);
+            
+            // Mouse Interactions
+            canvas.addEventListener('click', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                if (gameState !== 'PLAYING') return;
+
+                if (buildingMode) {
+                    buildTower(x, y, buildingMode);
+                    buildingMode = null;
+                    document.body.style.cursor = 'default';
+                } else {
+                    // Move Hero
+                    hero.targetX = x;
+                    hero.targetY = y;
+                    createParticle(x, y, 'click', '#fff');
+                }
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                mouseX = e.clientX - rect.left;
+                mouseY = e.clientY - rect.top;
+            });
+
+            // Buttons
+            btnStart.addEventListener('click', startGame);
+            
+            btnBuyBond.addEventListener('click', (e) => setBuildMode('bond', e));
+            btnBuyStock.addEventListener('click', (e) => setBuildMode('stock', e));
+            btnBuyRealEstate.addEventListener('click', (e) => setBuildMode('realEstate', e));
+            btnHeroUpgrade.addEventListener('click', upgradeHero);
+
+            // Game Loop
+            requestAnimationFrame(gameLoop);
+        }
+
+        function resize() {
+            canvas.width = gameContainer.clientWidth;
+            canvas.height = gameContainer.clientHeight;
+        }
+
+        function startGame() {
+            gameState = 'PLAYING';
+            elModal.classList.add('hidden');
+            
+            // Reset Vars
+            gold = 1000;
+            score = 0;
+            wave = 1;
+            baseHealth = 100;
+            interestTimer = 0;
+            enemies = [];
+            towers = [];
+            projectiles = [];
+            particles = [];
+            
+            // Reset Costs
+            costs = { bond: 100, stock: 250, realEstate: 500, upgrade: 300 };
+
+            hero = new Hero();
+            startWave();
+            updateUI();
+        }
+
+        function setBuildMode(type, e) {
+            e.stopPropagation(); // prevent canvas click
+            if (gold >= costs[type]) {
+                buildingMode = type;
+                document.body.style.cursor = 'crosshair';
+                createFloatingText(canvas.width/2, canvas.height - 100, "建設場所を選択してください", "#fff");
+            } else {
+                createFloatingText(canvas.width/2, canvas.height - 100, "資金不足です (流動性枯渇)", "#ef4444");
+            }
+        }
+
+        function buildTower(x, y, type) {
+            if (gold >= costs[type]) {
+                gold -= costs[type];
+                towers.push(new Tower(x, y, type));
+                
+                // Economic Principle: Supply & Demand / Scarcity
+                costs[type] = Math.floor(costs[type] * costMultipliers[type]);
+                
+                createFloatingText(x, y, "資産計上!", "#10b981");
+                createFloatingText(canvas.width/2, 100, `需要増により${type === 'bond' ? '債券' : type === 'stock' ? '株価' : '不動産価格'}上昇!`, "#fbbf24");
+                
+                updateUI();
+            }
+        }
+
+        function upgradeHero(e) {
+            e.stopPropagation();
+            if (gold >= costs.upgrade) {
+                gold -= costs.upgrade;
+                costs.upgrade = Math.floor(costs.upgrade * costMultipliers.upgrade);
+                hero.upgrade();
+                updateUI();
+            } else {
+                createFloatingText(canvas.width/2, canvas.height - 100, "資金不足です", "#ef4444");
+            }
+        }
+
+        function startWave() {
+            waveTimer = 0;
+            enemiesToSpawn = 5 + Math.floor(wave * 2.5);
+            spawnInterval = Math.max(0.5, 2.0 - (wave * 0.1));
+            spawnTimer = 0;
+            elWave.innerText = wave;
+            
+            // Increase interest rate slightly per wave (Central bank adjustment)
+            interestRate = Math.min(0.20, 0.05 + (wave * 0.005)); 
+            
+            createFloatingText(canvas.width/2, canvas.height/2, `インフレ波 ${wave} 到来!`, "#ef4444");
+        }
+
+        function spawnEnemy() {
+            enemies.push(new Enemy(wave));
+            enemiesToSpawn--;
+        }
+
+        function takeBaseDamage(amount) {
+            baseHealth -= amount;
+            // Screen shake effect logic could go here
+            if (baseHealth <= 0) {
+                endGame();
+            }
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            elModal.classList.remove('hidden');
+            elTitle.innerText = "経済崩壊 (Game Over)";
+            elTitle.className = "text-4xl md:text-6xl font-bold text-red-500 mb-4 retro-text";
+            elDesc.innerHTML = `あなたのGDP: <span class="text-yellow-400 font-bold">¥${score}</span><br>到達ウェーブ: ${wave}<br><br>インフレに耐えきれませんでした。<br>次こそは適切な市場介入を。`;
+            elBtnStart.innerText = "経済再建 (Retry)";
+        }
+
+        function getNearestEnemy(x, y, range) {
+            let nearest = null;
+            let minDst = range;
+            for (let e of enemies) {
+                if (e.dead) continue;
+                const dx = e.x - x;
+                const dy = e.y - y;
+                const dst = Math.sqrt(dx*dx + dy*dy);
+                if (dst < minDst) {
+                    minDst = dst;
+                    nearest = e;
+                }
+            }
+            return nearest;
+        }
+
+        function updateEconomy(dt) {
+            // Compound Interest Logic
+            interestTimer += dt * 1000;
+            if (interestTimer >= interestInterval) {
+                const interest = Math.floor(gold * interestRate);
+                if (interest > 0) {
+                    gold += interest;
+                    createFloatingText(canvas.width - 100, 80, `+利子 ¥${interest}`, "#10b981");
+                    updateUI();
+                }
+                interestTimer = 0;
+            }
+        }
+
+        function createFloatingText(x, y, text, color) {
+            const el = document.createElement('div');
+            el.className = 'floating-text';
+            el.innerText = text;
+            el.style.color = color;
+            el.style.left = x + 'px';
+            el.style.top = y + 'px';
+            gameContainer.appendChild(el);
+            setTimeout(() => el.remove(), 1000);
+        }
+
+        function createParticle(x, y, type, color) {
+            for(let i=0; i<5; i++) {
+                particles.push(new Particle(x, y, type, color));
+            }
+        }
+
+        function updateUI() {
+            elGold.innerText = `¥${gold.toLocaleString()}`;
+            elScore.innerText = `¥${score.toLocaleString()}`;
+            elInterest.innerText = `${(interestRate * 100).toFixed(1)}% / 5秒`;
+            
+            // Update buttons
+            document.getElementById('costBond').innerText = `¥${costs.bond}`;
+            document.getElementById('costStock').innerText = `¥${costs.stock}`;
+            document.getElementById('costRealEstate').innerText = `¥${costs.realEstate}`;
+            document.getElementById('costUpgrade').innerText = `¥${costs.upgrade}`;
+
+            // Greying out buttons
+            btnBuyBond.style.opacity = gold >= costs.bond ? 1 : 0.5;
+            btnBuyStock.style.opacity = gold >= costs.stock ? 1 : 0.5;
+            btnBuyRealEstate.style.opacity = gold >= costs.realEstate ? 1 : 0.5;
+            btnHeroUpgrade.style.opacity = gold >= costs.upgrade ? 1 : 0.5;
+        }
+
+        function gameLoop(timestamp) {
+            const dt = (timestamp - lastTime) / 1000;
+            lastTime = timestamp;
+
+            if (gameState === 'PLAYING') {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw Base (Central Bank/Treasury)
+                ctx.fillStyle = '#f59e0b';
+                ctx.beginPath();
+                ctx.arc(canvas.width/2, canvas.height/2, 30, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`国庫: ${Math.floor(baseHealth)}%`, canvas.width/2, canvas.height/2 + 5);
+
+                // Spawning Logic
+                if (enemiesToSpawn > 0) {
+                    spawnTimer += dt;
+                    if (spawnTimer > spawnInterval) {
+                        spawnEnemy();
+                        spawnTimer = 0;
+                    }
+                } else if (enemies.length === 0) {
+                    // Wave clear
+                    wave++;
+                    startWave();
+                }
+
+                // Update & Draw Entities
+                hero.update(dt);
+                hero.draw(ctx);
+
+                towers.forEach(t => {
+                    t.update(dt);
+                    t.draw(ctx);
+                });
+
+                projectiles = projectiles.filter(p => !p.dead);
+                projectiles.forEach(p => {
+                    p.update(dt);
+                    p.draw(ctx);
+                });
+
+                enemies = enemies.filter(e => !e.dead);
+                enemies.forEach(e => {
+                    e.update(dt);
+                    e.draw(ctx);
+                });
+
+                particles = particles.filter(p => p.life > 0);
+                particles.forEach(p => {
+                    p.update(dt);
+                    p.draw(ctx);
+                });
+
+                // Economy
+                updateEconomy(dt);
+
+                // Build Mode Preview
+                if (buildingMode) {
+                    ctx.beginPath();
+                    ctx.arc(mouseX, mouseY, 15, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#fff';
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Init
+        init();
+
+    </script>
+</body>
+</html>
