@@ -165,6 +165,7 @@
         let wave = 1;
         let baseHealth = 100;
         let maxBaseHealth = 100;
+        let recentBaseDamageTimer = 0;
         let screenShakeTimer = 0;
         let screenShakeDuration = 0;
         let screenShakeIntensity = 0;
@@ -728,6 +729,7 @@
             score = 0;
             wave = 1;
             baseHealth = maxBaseHealth;
+            recentBaseDamageTimer = 0;
             screenShakeTimer = 0;
             baseShakeTimer = 0;
             if (elDamageFlash) elDamageFlash.style.opacity = '0';
@@ -946,13 +948,26 @@
         }
 
         function takeBaseDamage(amount) {
+            const prevHealth = baseHealth;
             baseHealth = Math.max(0, baseHealth - amount);
-            triggerScreenShake(10, 0.4);
-            triggerBaseShake(6, 0.45);
-            triggerDamageFlash();
-            if ((baseHealth / maxBaseHealth) <= 0.35) {
+            const hpRatio = baseHealth / maxBaseHealth;
+            const damageRatio = Math.min(1, (prevHealth - baseHealth) / maxBaseHealth);
+
+            recentBaseDamageTimer = 0.7;
+            triggerScreenShake(10 + damageRatio * 18, 0.5);
+            triggerBaseShake(6 + damageRatio * 12, 0.55);
+            triggerDamageFlash(0.55 + damageRatio * 0.35);
+
+            if (hpRatio <= 0.35) {
                 playWarningBeep();
             }
+            if (hpRatio <= 0.25) {
+                createFloatingText(canvas.width/2, canvas.height/2 - 70, '国庫が危険です！', '#f87171');
+            }
+            if (hpRatio > 0 && hpRatio <= 0.12) {
+                createFloatingText(canvas.width/2, canvas.height/2 - 40, '次の被弾で終了する恐れ！', '#fca5a5');
+            }
+
             updateBaseStatus();
             if (baseHealth <= 0) {
                 endGame();
@@ -1027,9 +1042,9 @@
             baseShakeTimer = duration;
         }
 
-        function triggerDamageFlash() {
+        function triggerDamageFlash(intensity = 0.5) {
             if (!elDamageFlash) return;
-            elDamageFlash.style.opacity = '0.5';
+            elDamageFlash.style.opacity = `${Math.min(0.9, Math.max(0.2, intensity))}`;
             setTimeout(() => {
                 elDamageFlash.style.opacity = '0';
             }, 180);
@@ -1067,7 +1082,7 @@
             const percentText = `${Math.max(0, Math.floor(hpRatio * 100))}%`;
             const statusText = hpRatio > 0.6 ? '安定' : hpRatio > 0.3 ? '要警戒' : '危険';
             const colorClass = hpRatio > 0.6 ? 'text-emerald-300' : hpRatio > 0.3 ? 'text-yellow-200' : 'text-red-300';
-            const cautionText = hpRatio > 0.6 ? '' : hpRatio > 0.3 ? '国庫損耗中。防衛を強化！' : '国庫が危険域！即応が必要です';
+            const cautionText = hpRatio > 0.6 ? '国庫は安定しています' : hpRatio > 0.3 ? '国庫損耗中。防衛を強化！' : '国庫が危険域！即応が必要です';
             const nextHitText = hpRatio <= 0.12 ? '次の被弾で経済崩壊の恐れ！' : hpRatio <= 0.25 ? 'あと一歩で崩壊します' : '';
 
             if (elBaseHealthDisplay) elBaseHealthDisplay.innerText = percentText;
@@ -1075,47 +1090,84 @@
                 elBaseHealthStatus.innerText = statusText;
                 elBaseHealthStatus.className = `text-xs ${colorClass}`;
             }
-            if (elBaseHealthWarning) elBaseHealthWarning.innerText = cautionText;
+            if (elBaseHealthWarning) {
+                elBaseHealthWarning.innerText = nextHitText || cautionText;
+            }
 
             if (elHudHpPercent) {
                 elHudHpPercent.innerText = `残りHP ${percentText}`;
                 elHudHpPercent.className = `text-lg font-bold ${colorClass}`;
             }
             if (elHudHpWarning) elHudHpWarning.innerText = cautionText;
-            if (elHudNextHit) elHudNextHit.innerText = nextHitText;
+            if (elHudNextHit) elHudNextHit.innerText = nextHitText || '';
         }
 
         function drawBase() {
             const hpRatio = Math.max(0, baseHealth) / maxBaseHealth;
             const baseColor = getBaseColorByRatio(hpRatio);
             const decay = baseShakeDuration > 0 ? Math.min(1, baseShakeTimer / baseShakeDuration) : 0;
-            const baseJitterX = baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0;
-            const baseJitterY = baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0;
+            const wobbleFactor = recentBaseDamageTimer > 0 ? (recentBaseDamageTimer / 0.7) : 0;
+            const wave = Math.sin(Date.now() / 80);
+            const baseJitterX = (baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0) + wave * 2 * wobbleFactor;
+            const baseJitterY = (baseShakeTimer > 0 ? (Math.random() * 2 - 1) * baseShakeIntensity * decay : 0) + Math.cos(Date.now() / 90) * 2 * wobbleFactor;
             const centerX = canvas.width/2 + baseJitterX;
             const centerY = canvas.height/2 + baseJitterY;
             const percentDisplay = Math.max(0, Math.floor(hpRatio * 100));
+            const pulse = hpRatio < 0.35 ? (0.4 + Math.abs(Math.sin(Date.now() / 240))) : 0;
 
             ctx.save();
             ctx.strokeStyle = '#1f2937';
-            ctx.lineWidth = 8;
+            ctx.lineWidth = 10;
             ctx.beginPath();
-            ctx.arc(centerX, centerY, 40, 0, Math.PI * 2);
+            ctx.arc(centerX, centerY, 44, 0, Math.PI * 2);
             ctx.stroke();
 
-            ctx.strokeStyle = baseColor;
+            const gradient = ctx.createLinearGradient(centerX - 50, centerY - 50, centerX + 50, centerY + 50);
+            gradient.addColorStop(0, baseColor);
+            gradient.addColorStop(1, hpRatio > 0.3 ? '#bbf7d0' : '#fecaca');
+            ctx.lineWidth = 10 + pulse * 1.5;
+            ctx.strokeStyle = gradient;
+            ctx.shadowColor = baseColor;
+            ctx.shadowBlur = 8 + (1 - hpRatio) * 14 + pulse * 6;
             ctx.beginPath();
-            ctx.arc(centerX, centerY, 40, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hpRatio);
+            ctx.arc(centerX, centerY, 44, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hpRatio);
             ctx.stroke();
 
-            ctx.fillStyle = '#111827';
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#0f172a';
             ctx.beginPath();
-            ctx.arc(centerX, centerY, 30, 0, Math.PI*2);
+            ctx.arc(centerX, centerY, 30 + pulse * 1.5, 0, Math.PI*2);
             ctx.fill();
+
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, 32 + pulse * 1.5, 0, Math.PI * 2);
+            ctx.stroke();
+
+            const barWidth = 150;
+            const barHeight = 12;
+            const barX = centerX - barWidth / 2;
+            const barY = centerY + 60 + pulse * 2;
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+            ctx.fillRect(barX, barY, barWidth, barHeight);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(barX, barY, barWidth, barHeight);
+            ctx.fillStyle = baseColor;
+            ctx.shadowColor = baseColor;
+            ctx.shadowBlur = 10 + pulse * 5;
+            ctx.fillRect(barX, barY, barWidth * hpRatio, barHeight);
+            ctx.shadowBlur = 0;
 
             ctx.fillStyle = '#fff';
             ctx.font = '12px Arial';
             ctx.textAlign = 'center';
             ctx.fillText(`国庫: ${percentDisplay}%`, centerX, centerY + 5);
+            ctx.fillStyle = hpRatio > 0.6 ? '#c7f9cc' : hpRatio > 0.3 ? '#fef08a' : '#fecdd3';
+            ctx.font = '11px Arial';
+            ctx.fillText(hpRatio <= 0.12 ? '次の被弾で致命傷!' : '資本を守れ', centerX, barY + barHeight + 14);
+
             ctx.restore();
         }
 
@@ -1149,6 +1201,9 @@
             }
             if (baseShakeTimer > 0) {
                 baseShakeTimer = Math.max(0, baseShakeTimer - dt);
+            }
+            if (recentBaseDamageTimer > 0) {
+                recentBaseDamageTimer = Math.max(0, recentBaseDamageTimer - dt);
             }
 
             if (gameState === 'PLAYING') {
